@@ -1,4 +1,5 @@
 #include <bits/types.h>
+#include <linux/limits.h>
 #include <pulse/volume.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -415,6 +416,11 @@ int main(){
 	int brightness_fd = open("/sys/class/backlight/amdgpu_bl0/brightness", O_RDONLY);
 	int cache_fd=open("/tmp/status_cache", O_RDWR | O_CREAT, 0666);
 
+	int pipe_fd_read = open("./aq", O_RDONLY | O_NONBLOCK);
+	int pipe_fd = open("./aq", O_WRONLY | O_NONBLOCK);
+	close(pipe_fd_read);
+	signal(SIGPIPE, SIG_IGN);
+
 	int volume=0;
 	char buff[100]={0};
 	int cpu0f=0;
@@ -435,7 +441,6 @@ int main(){
 	pthread_create(&net_thr, NULL, get_network_stats, (void*)&net_data);
 	pthread_create(&cpu_thr, NULL, get_cpu_load, (void*)&cpu_data);
 	pthread_create(&audio_thr, NULL, get_sink_volume, (void*)&p_data);
-
 
 	get_cpu_freqs(cpuinfo_f, &cpu0f, &cpu1f, &cpu2f, &cpu3f);
 	get_temp(temp_fd,&tempf);
@@ -477,9 +482,16 @@ int main(){
 			/*,p_data.vol,p_data.muted,cpu_data.ratio,tempf,cpu0f,cpu1f,cpu2f,cpu3f,gov,*/
 			/*mem_used,net_data.network_output,capacity,pow_now,floorf(brightness),date_str);*/
 
-	printf("%d%% | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %d %.2fW | %.0f%% | %s \n"
-			,p_data.vol,cpu_data.ratio,tempf,cpu0f,cpu1f,cpu2f,cpu3f,gov,
-			mem_used,net_data.network_output,capacity,pow_now,floorf(brightness),date_str);
+	while(1){
+		char buf[400]={0};
+		sprintf(buf,"%d%% | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %d %.2fW | %.0f%% | %s \n"
+				,p_data.vol,cpu_data.ratio,tempf,cpu0f,cpu1f,cpu2f,cpu3f,gov,
+				mem_used,net_data.network_output,capacity,pow_now,floorf(brightness),date_str);
+		write(STDOUT_FILENO,buf,400);
+		fflush(stdout);
+		int write_ret=write(pipe_fd,buf,400);
+		usleep(10000);
+	}
 
 	deactivate_pulse(&p_data);
 }
