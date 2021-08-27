@@ -60,9 +60,16 @@ typedef struct pulse_data{
 typedef struct power_data{
 	int capacity_fd;
 	int pow_fd;
+	int charging_fd;
 
 	int capacity;
 	float pow_now;
+	float pow_full;
+	char charging;
+	int hours_left;
+	int minutes_left;
+
+	char* output_buffer;
 }power_data;
 
 void reset_fp(FILE* ptr){
@@ -91,7 +98,6 @@ void context_change_cb(pa_context *c, void* userdata){
 			((pulse_data*)userdata)->pulse_ready=1;
 		}break;
 		default:
-		printf("context=%d\n",pa_context_get_state(c));
 		break;
 	}
 }
@@ -403,14 +409,55 @@ void get_time(char* date_str){
 }
 
 void* get_capacity_and_pow(void* thread_data){
+	power_data* pow_data=(power_data*)thread_data;
+	pow_data->pow_full/=1000000;
+	char* out_buf=pow_data->output_buffer;
 	while(1){
-		power_data* pow_data=(power_data*)thread_data;
+		memset(out_buf, 0, 100);
 		char buf[100]={0};
+
 		read(pow_data->capacity_fd,buf,100);
 		sscanf(buf, "%d",&pow_data->capacity);
 		read(pow_data->pow_fd,buf,100);
 		sscanf(buf, "%f",&pow_data->pow_now);
 		pow_data->pow_now=pow_data->pow_now/1000000;
+		read(pow_data->charging_fd,&pow_data->charging,1);
+
+		float capacity=pow_data->capacity;
+		float energy_full=pow_data->pow_full;
+		float pow_now=pow_data->pow_now;
+		
+		sprintf(out_buf, "%d %.2f",pow_data->capacity,pow_data->pow_now);
+
+		if(pow_data->charging=='C'){
+			strcat(out_buf, "+");
+			float hours_f=(energy_full*(1-capacity/100)/pow_now);
+			pow_data->hours_left=(int)hours_f;
+			pow_data->minutes_left=(hours_f-(int)hours_f)*60;
+		}else{
+			strcat(out_buf, "-");
+			float hours_f=(energy_full*(capacity/100)/pow_now);
+			pow_data->hours_left=(int)hours_f;
+			pow_data->minutes_left=(hours_f-(int)hours_f)*60;
+		}
+
+		if(pow_data->hours_left!=0){
+			memset(buf, 0, 100);
+			sprintf(buf, "%d",pow_data->hours_left);
+			strcat(out_buf, " ");
+			strcat(out_buf, buf);
+			strcat(out_buf, "h");
+		}
+
+		if(pow_data->minutes_left!=0){
+			memset(buf, 0, 100);
+			sprintf(buf, "%d",pow_data->minutes_left);
+			strcat(out_buf, " ");
+			strcat(out_buf, buf);
+			strcat(out_buf, "m");
+		}
+
+		lseek(pow_data->charging_fd, 0, SEEK_SET);
 		lseek(pow_data->capacity_fd, 0, SEEK_SET);
 		lseek(pow_data->pow_fd, 0, SEEK_SET);
 		usleep(SLEEP_TIME);
@@ -450,6 +497,8 @@ int main(){
 	cpu_freq_data cpu_freqs_data={0};
 	pulse_data p_data={0};
 	power_data pow_data={0};
+	char pow_buff[100]={0};
+	pow_data.output_buffer=pow_buff;
 
 	net_data.rx_bytes_fd = open("/sys/class/net/wlan0/statistics/rx_bytes", O_RDONLY);
 	net_data.tx_bytes_fd = open("/sys/class/net/wlan0/statistics/tx_bytes", O_RDONLY);
@@ -471,13 +520,14 @@ int main(){
 	int governor_fd =open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",O_RDONLY);
 	pow_data.capacity_fd =open("/sys/class/power_supply/BAT0/capacity",O_RDONLY);
 	pow_data.pow_fd =open("/sys/class/power_supply/BAT0/power_now",O_RDONLY);
+	pow_data.charging_fd =open("/sys/class/power_supply/BAT0/status",O_RDONLY);
+	int energy_full_fd=open("/sys/class/power_supply/BAT0/energy_full",O_RDONLY);
 	int brightness_fd = open("/sys/class/backlight/amdgpu_bl0/brightness", O_RDONLY);
 
 	int pipe_fd_read = open("./aq", O_RDONLY | O_NONBLOCK);
 	int pipe_fd = open("./aq", O_WRONLY | O_NONBLOCK);
 	close(pipe_fd_read);
 	signal(SIGPIPE, SIG_IGN);
-	/*signal(SIGINT, cleanup);*/
 
 	int volume=0;
 	int cpu0f=0;
@@ -497,8 +547,15 @@ int main(){
 	pthread_create(&pow_thr, NULL, get_capacity_and_pow, (void*)&pow_data);
 	pthread_create(&cpu_freqs_thr, NULL, get_cpu_freqs, (void*)&cpu_freqs_data);
 
+	
+	char buff[100]={0};
+	read(energy_full_fd,buff,100);
+	sscanf(buff, "%f",&pow_data.pow_full);
+	close(energy_full_fd);
+
 	while(1){
 		char buff[100]={0};
+		char print_buff[200]={0};
 		snprintf(buff,100, "%d%%",p_data.vol);
 		if(p_data.muted){
 			strcat(buff," M");
@@ -509,9 +566,12 @@ int main(){
 		get_brightness(brightness_fd,&brightness);
 		get_time(date_str);
 
-		printf("%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %d %.2fW | %.0f%% | %s \n"
+		sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %s | %.0f%% | %s \n"
 				,buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
-				mem_used,net_data.network_output,pow_data.capacity,pow_data.pow_now,floorf(brightness),date_str);
+				mem_used,net_data.network_output,pow_data.output_buffer,floorf(brightness),date_str);
+		printf("%s",print_buff);
+
+		write(pipe_fd,print_buff,200);
 		fflush(stdout);
 		usleep(100000);
 	}
