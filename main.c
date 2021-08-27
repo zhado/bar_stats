@@ -1,6 +1,8 @@
 #include <bits/types.h>
 #include <linux/limits.h>
-#include <pulse/volume.h>
+#include <pulse/context.h>
+#include <pulse/def.h>
+#include <pulse/subscribe.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
@@ -12,7 +14,7 @@
 #include <fcntl.h>
 #include <signal.h>
 
-int SLEEP_TIME=900000;
+int SLEEP_TIME=600000;
 int running=0;
 
 typedef struct network_thread_data{
@@ -32,6 +34,17 @@ typedef struct cpu_usage_thread_data{
 	float ratio;
 }cpu_usage_thread_data;
 
+typedef struct cpu_freq_data{
+	int cpu0_fd;
+	int cpu1_fd;
+	int cpu2_fd;
+	int cpu3_fd;
+	int cpu0_freq;
+	int cpu1_freq;
+	int cpu2_freq;
+	int cpu3_freq;
+	float ratio;
+}cpu_freq_data;
 
 typedef struct pulse_data{
 	pa_threaded_mainloop* main_loop;
@@ -43,12 +56,21 @@ typedef struct pulse_data{
 	int vol;
 }pulse_data;
 
+typedef struct power_data{
+	int capacity_fd;
+	int pow_fd;
+
+	int capacity;
+	float pow_now;
+}power_data;
+
 void reset_fp(FILE* ptr){
 	fseek( ptr, 0, SEEK_END );
 	rewind(ptr);
 }
 
 void info_cb (pa_context *c, const pa_sink_info *i, int eol, void *userdata){
+	pulse_data* p_data=((pulse_data*)userdata);
 	if(eol)
 		return;
 	float vol=((float)i->volume.values[0])/((float)PA_VOLUME_NORM)*100;
@@ -56,6 +78,8 @@ void info_cb (pa_context *c, const pa_sink_info *i, int eol, void *userdata){
 		((pulse_data*)userdata)->muted='M';
 	}
 	((pulse_data*)userdata)->vol=vol;
+
+	pa_threaded_mainloop_signal(p_data->main_loop, 0);
 }
 
 void context_change_cb(pa_context *c, void* userdata){
@@ -64,6 +88,7 @@ void context_change_cb(pa_context *c, void* userdata){
 			((pulse_data*)userdata)->pulse_ready=1;
 		}break;
 		default:
+		printf("context=%d\n",pa_context_get_state(c));
 		break;
 	}
 }
@@ -93,14 +118,24 @@ void deactivate_pulse(pulse_data* p_data){
 
 void* get_sink_volume(void* thread_data){
 	pulse_data* p_data=((pulse_data*)thread_data);
-	p_data->done=0;
 	p_data->vol=-1;
 	p_data->muted=0;
-	pa_context_get_sink_info_by_name(p_data->context,"alsa_output.pci-0000_04_00.6.analog-stereo",info_cb,p_data);
+	/*while(1){*/
+	p_data->done=0;
+	pa_operation* op=pa_context_get_sink_info_by_name(p_data->context,"alsa_output.pci-0000_04_00.6.analog-stereo",info_cb,p_data);
+	pa_operation_state_t state=pa_operation_get_state(op);
+
+	/*printf("state=%d\n",state);*/
 	while(p_data->vol==-1){
+		if(state==PA_OPERATION_RUNNING)
+			break;
+		/*return 0;*/
 		usleep(1);
 	}
 	p_data->done=1;
+	pa_operation_unref(op);
+	usleep(SLEEP_TIME/4);
+	/*}*/
 	return 0;
 }
 
@@ -185,42 +220,37 @@ void make_net_output(network_thread_data* net_data){
 }
 
 void* get_network_stats(void* thread_data){
+	int use_bytes=0;
+	network_thread_data* net_data =(network_thread_data*)thread_data;
+	char* output=net_data->network_output;
+	char buf[100]={0};
+	uint64_t rx_bytes_start=0;
+	uint64_t tx_bytes_start=0;
+	uint64_t rx_packets_start=0;
+	uint64_t tx_packets_start=0;
+
+	uint64_t rx_bytes_end=0;
+	uint64_t tx_bytes_end=0;
+	uint64_t rx_packets_end=0;
+	uint64_t tx_packets_end=0;
+	read(net_data->rx_bytes_fd,buf,100);
+	sscanf(buf, "%lu",&rx_bytes_start);
+
+	read(net_data->tx_bytes_fd,buf,100);
+	sscanf(buf, "%lu",&tx_bytes_start);
+
+	read(net_data->rx_packets_fd,buf,100);
+	sscanf(buf, "%lu",&rx_packets_start);
+
+	read(net_data->tx_packets_fd,buf,100);
+	sscanf(buf, "%lu",&tx_packets_start);
+
+	lseek(net_data->rx_bytes_fd, 0, SEEK_SET);
+	lseek(net_data->tx_bytes_fd, 0, SEEK_SET);
+	lseek(net_data->rx_packets_fd, 0, SEEK_SET);
+	lseek(net_data->tx_packets_fd, 0, SEEK_SET);
 	while(running){
-		int use_bytes=0;
-		network_thread_data* net_data =(network_thread_data*)thread_data;
-		char* output=net_data->network_output;
-		memset(net_data->network_output, 0, 100);
-
-		uint64_t rx_bytes_start=0;
-		uint64_t tx_bytes_start=0;
-		uint64_t rx_packets_start=0;
-		uint64_t tx_packets_start=0;
-
-		uint64_t rx_bytes_end=0;
-		uint64_t tx_bytes_end=0;
-		uint64_t rx_packets_end=0;
-		uint64_t tx_packets_end=0;
-
-		char buf[100]={0};
-		read(net_data->rx_bytes_fd,buf,100);
-		sscanf(buf, "%lu",&rx_bytes_start);
-
-		read(net_data->tx_bytes_fd,buf,100);
-		sscanf(buf, "%lu",&tx_bytes_start);
-
-		read(net_data->rx_packets_fd,buf,100);
-		sscanf(buf, "%lu",&rx_packets_start);
-
-		read(net_data->tx_packets_fd,buf,100);
-		sscanf(buf, "%lu",&tx_packets_start);
-
-		usleep(SLEEP_TIME);
-
-		lseek(net_data->rx_bytes_fd, 0, SEEK_SET);
-		lseek(net_data->tx_bytes_fd, 0, SEEK_SET);
-		lseek(net_data->rx_packets_fd, 0, SEEK_SET);
-		lseek(net_data->tx_packets_fd, 0, SEEK_SET);
-
+		usleep(SLEEP_TIME*2);
 		read(net_data->rx_bytes_fd,buf,100);
 		sscanf(buf, "%lu",&rx_bytes_end);
 
@@ -242,8 +272,14 @@ void* get_network_stats(void* thread_data){
 		net_data->tx_bytes_dx=tx_bytes_end-tx_bytes_start;
 		net_data->rx_packets_dx=rx_packets_end-rx_packets_start;
 		net_data->tx_packets_dx=tx_packets_end-tx_packets_start;
+		rx_bytes_start=rx_bytes_end;
+		tx_bytes_start=tx_bytes_end;
+		rx_packets_start=rx_packets_end;
+		tx_packets_start=tx_packets_end;
 
+		memset(net_data->network_output, 0, 100);
 		make_net_output(net_data);
+		int a=10;
 	}
 	return 0;
 }
@@ -304,33 +340,30 @@ void* get_cpu_load(void* thread_data){
 	return 0;
 }
 
-void get_cpu_freqs(FILE* cpuinfo_f,int* cpu0f,int* cpu1f,int* cpu2f,int* cpu3f){
-
-	fseek(cpuinfo_f, 0, SEEK_SET);
+void get_cpu_freqs(cpu_freq_data* cpu_freqs){
 	char buff[100]={0};
-	for(int i=0;i<8;i++){
-		fgets(buff, 100, cpuinfo_f);
-	}
+	lseek(cpu_freqs->cpu0_fd, 0, SEEK_SET);
+	read(cpu_freqs->cpu0_fd,buff,100);
+	sscanf(buff,"%d",&cpu_freqs->cpu0_freq);
+	memset(buff, 0, 100);
 
-	sscanf(buff,"%*s%*s%*s%d",cpu0f);
+	lseek(cpu_freqs->cpu1_fd, 0, SEEK_SET);
+	read(cpu_freqs->cpu1_fd,buff,100);
+	sscanf(buff,"%d",&cpu_freqs->cpu1_freq);
+	memset(buff, 0, 100);
 
-	for(int i=0;i<35;i++){
-		fgets(buff, 100, cpuinfo_f);
-	}
+	lseek(cpu_freqs->cpu2_fd, 0, SEEK_SET);
+	read(cpu_freqs->cpu2_fd,buff,100);
+	sscanf(buff,"%d",&cpu_freqs->cpu2_freq);
+	memset(buff, 0, 100);
 
-	sscanf(buff,"%*s%*s%*s%d",cpu1f);
-
-	for(int i=0;i<35;i++){
-		fgets(buff, 100, cpuinfo_f);
-	}
-
-	sscanf(buff,"%*s%*s%*s%d",cpu2f);
-
-	for(int i=0;i<35;i++){
-		fgets(buff, 100, cpuinfo_f);
-	}
-
-	sscanf(buff,"%*s%*s%*s%d",cpu3f);
+	lseek(cpu_freqs->cpu3_fd, 0, SEEK_SET);
+	read(cpu_freqs->cpu3_fd,buff,100);
+	sscanf(buff,"%d",&cpu_freqs->cpu3_freq);
+	cpu_freqs->cpu0_freq/=1000;
+	cpu_freqs->cpu1_freq/=1000;
+	cpu_freqs->cpu2_freq/=1000;
+	cpu_freqs->cpu3_freq/=1000;
 }
 
 void get_used_memory(int meminfo_fd, uint32_t* mem_used ){
@@ -356,15 +389,20 @@ void get_time(char* date_str){
 	strftime(date_str, 100,"%a %d/%m/%y %H:%M", &result);
 }
 
-void get_capacity_and_pow(int capacity_fd,int pow_fd,int* capacity,float* powr){
-	char buf[100]={0};
-	read(capacity_fd,buf,100);
-	sscanf(buf, "%d",capacity);
-	read(pow_fd,buf,100);
-	sscanf(buf, "%f",powr);
-	*powr=*powr/1000000;
-	lseek(capacity_fd, 0, SEEK_SET);
-	lseek(pow_fd, 0, SEEK_SET);
+void* get_capacity_and_pow(void* thread_data){
+	while(1){
+		power_data* pow_data=(power_data*)thread_data;
+		char buf[100]={0};
+		read(pow_data->capacity_fd,buf,100);
+		sscanf(buf, "%d",&pow_data->capacity);
+		read(pow_data->pow_fd,buf,100);
+		sscanf(buf, "%f",&pow_data->pow_now);
+		pow_data->pow_now=pow_data->pow_now/1000000;
+		lseek(pow_data->capacity_fd, 0, SEEK_SET);
+		lseek(pow_data->pow_fd, 0, SEEK_SET);
+		usleep(SLEEP_TIME);
+	}
+	return 0;
 }
 
 void get_brightness(int brightness_fd,float* brightness){
@@ -389,21 +427,23 @@ void get_temp(int temp_fd,float* tempf){
 	lseek(temp_fd, 0, SEEK_SET);
 }
 
-void cleanup(network_thread_data* net_data,cpu_usage_thread_data* cpu_data,pulse_data* p_data){
-	running=0;
-	/*pthread_join(cpu_thr, 0);*/
-	/*pthread_join(net_thr, 0);*/
-	deactivate_pulse(p_data);
+void my_subscription_callback(pa_context *c, pa_subscription_event_type_t t,uint32_t idx, void *userdata) {
+	printf("rame movida\n");
+	get_sink_volume(userdata);
 }
 
+void suc_cb (pa_context *c, int success, void *userdata){
+	printf("suc%d\n",success);
+}
 int main(){
-
 	running=1;
-	pthread_t audio_thr,net_thr,cpu_thr;
+	pthread_t audio_thr,net_thr,cpu_load_thr,pow_thr;
 
 	network_thread_data net_data={0};
 	cpu_usage_thread_data cpu_data={0};
+	cpu_freq_data cpu_freqs={0};
 	pulse_data p_data={0};
+	power_data pow_data={0};
 
 	net_data.rx_bytes_fd = open("/sys/class/net/wlan0/statistics/rx_bytes", O_RDONLY);
 	net_data.tx_bytes_fd = open("/sys/class/net/wlan0/statistics/tx_bytes", O_RDONLY);
@@ -412,19 +452,25 @@ int main(){
 
 	cpu_data.stat_fd = open("/proc/stat", O_RDONLY);
 
-	FILE* cpuinfo_f = fopen("/proc/cpuinfo", "r");
+	cpu_freqs.cpu0_fd = open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", O_RDONLY);
+	cpu_freqs.cpu1_fd = open("/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq", O_RDONLY);
+	cpu_freqs.cpu2_fd = open("/sys/devices/system/cpu/cpu2/cpufreq/scaling_cur_freq", O_RDONLY);
+	cpu_freqs.cpu3_fd = open("/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq", O_RDONLY);
+
+
+	/*FILE* cpuinfo_f = fopen("/proc/cpuinfo", "r");*/
 	int temp_fd =open("/sys/class/hwmon/hwmon3/temp1_input",O_RDONLY);
 	int meminfo_fd =open("/proc/meminfo",O_RDONLY);
 	int governor_fd =open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",O_RDONLY);
-	int capacity_fd =open("/sys/class/power_supply/BAT0/capacity",O_RDONLY);
-	int pow_fd =open("/sys/class/power_supply/BAT0/power_now",O_RDONLY);
+	pow_data.capacity_fd =open("/sys/class/power_supply/BAT0/capacity",O_RDONLY);
+	pow_data.pow_fd =open("/sys/class/power_supply/BAT0/power_now",O_RDONLY);
 	int brightness_fd = open("/sys/class/backlight/amdgpu_bl0/brightness", O_RDONLY);
 
 	int pipe_fd_read = open("./aq", O_RDONLY | O_NONBLOCK);
 	int pipe_fd = open("./aq", O_WRONLY | O_NONBLOCK);
 	close(pipe_fd_read);
 	signal(SIGPIPE, SIG_IGN);
-	signal(SIGINT, cleanup);
+	/*signal(SIGINT, cleanup);*/
 
 	int volume=0;
 	char buff[100]={0};
@@ -434,30 +480,33 @@ int main(){
 	int cpu3f=0;
 	uint32_t mem_used=0;
 	char gov[4]={0};
-	int capacity=0;
-	float pow_now=0;
 	float tempf=0;
 	float brightness=0;
 	char date_str[100];
 
 	pulse_init(&p_data);
+	/*pa_subscription_mask_t  mask=;*/
+	pa_context_subscribe(p_data.context, PA_SUBSCRIPTION_MASK_SINK,suc_cb, &p_data);
+	sleep(2);
+	pa_context_set_subscribe_callback (p_data.context,my_subscription_callback,&p_data);
+	sleep(10);
+	exit(1);
 
 	//	volume
 	pthread_create(&net_thr, NULL, get_network_stats, (void*)&net_data);
-	pthread_create(&cpu_thr, NULL, get_cpu_load, (void*)&cpu_data);
+	pthread_create(&cpu_load_thr, NULL, get_cpu_load, (void*)&cpu_data);
 	pthread_create(&audio_thr, NULL, get_sink_volume, (void*)&p_data);
+	pthread_create(&pow_thr, NULL, get_capacity_and_pow, (void*)&pow_data);
 
 	/*printf("%d%%%c | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %d %.2fW | %.0f%% | %s \n"*/
 			/*,p_data.vol,p_data.muted,cpu_data.ratio,tempf,cpu0f,cpu1f,cpu2f,cpu3f,gov,*/
 			/*mem_used,net_data.network_output,capacity,pow_now,floorf(brightness),date_str);*/
 
 	while(1){
-		pthread_create(&audio_thr, NULL, get_sink_volume, (void*)&p_data);
-		get_cpu_freqs(cpuinfo_f, &cpu0f, &cpu1f, &cpu2f, &cpu3f);
+		get_cpu_freqs(&cpu_freqs);
 		get_temp(temp_fd,&tempf);
 		get_used_memory(meminfo_fd, &mem_used);
 		get_governor(governor_fd,gov);
-		get_capacity_and_pow(capacity_fd,pow_fd,&capacity,&pow_now);
 		get_brightness(brightness_fd,&brightness);
 		get_time(date_str);
 
@@ -466,14 +515,11 @@ int main(){
 		}
 
 		char buf[400]={0};
-		sprintf(buf,"%d%% | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %d %.2fW | %.0f%% | %s \n"
-				,p_data.vol,cpu_data.ratio,tempf,cpu0f,cpu1f,cpu2f,cpu3f,gov,
-				mem_used,net_data.network_output,capacity,pow_now,floorf(brightness),date_str);
-		write(STDOUT_FILENO,buf,400);
+		printf("%d%% | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %d %.2fW | %.0f%% | %s \n"
+				,p_data.vol,cpu_data.ratio,tempf,cpu_freqs.cpu0_freq,cpu_freqs.cpu1_freq,cpu_freqs.cpu2_freq,cpu_freqs.cpu3_freq,gov,
+				mem_used,net_data.network_output,pow_data.capacity,pow_data.pow_now,floorf(brightness),date_str);
 		fflush(stdout);
-		int write_ret=write(pipe_fd,buf,400);
-
-		usleep(10000);
+		usleep(100000);
 	}
 
 }
