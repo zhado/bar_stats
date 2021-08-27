@@ -58,6 +58,7 @@ typedef struct pulse_data{
 }pulse_data;
 
 typedef struct power_data{
+	char power_output[100];
 	int capacity_fd;
 	int pow_fd;
 	int charging_fd;
@@ -69,7 +70,6 @@ typedef struct power_data{
 	int hours_left;
 	int minutes_left;
 
-	char* output_buffer;
 }power_data;
 
 void reset_fp(FILE* ptr){
@@ -411,9 +411,8 @@ void get_time(char* date_str){
 void* get_capacity_and_pow(void* thread_data){
 	power_data* pow_data=(power_data*)thread_data;
 	pow_data->pow_full/=1000000;
-	char* out_buf=pow_data->output_buffer;
+	char* out_buf=pow_data->power_output;
 	while(1){
-		memset(out_buf, 0, 100);
 		char buf[100]={0};
 
 		read(pow_data->capacity_fd,buf,100);
@@ -427,22 +426,28 @@ void* get_capacity_and_pow(void* thread_data){
 		float energy_full=pow_data->pow_full;
 		float pow_now=pow_data->pow_now;
 		
+		memset(out_buf, 0, 99);
 		sprintf(out_buf, "%d %.2f",pow_data->capacity,pow_data->pow_now);
 
+		pow_data->hours_left=0;
+		float hours_f=0;
 		if(pow_data->charging=='C'){
 			strcat(out_buf, "+");
-			float hours_f=(energy_full*(1-capacity/100)/pow_now);
-			pow_data->hours_left=(int)hours_f;
-			pow_data->minutes_left=(hours_f-(int)hours_f)*60;
+			if(pow_now!=0)
+				hours_f=(energy_full*(1-capacity/100)/pow_now);
+		}else if (pow_data->charging=='U'){
+			strcat(out_buf, "=");
 		}else{
 			strcat(out_buf, "-");
-			float hours_f=(energy_full*(capacity/100)/pow_now);
-			pow_data->hours_left=(int)hours_f;
-			pow_data->minutes_left=(hours_f-(int)hours_f)*60;
+			if(pow_now!=0)
+				hours_f=(energy_full*(capacity/100)/pow_now);
 		}
 
+		pow_data->hours_left=floor(hours_f);
+		pow_data->minutes_left=(hours_f-(int)hours_f)*60;
+
 		if(pow_data->hours_left!=0){
-			memset(buf, 0, 100);
+			memset(buf, 0, 99);
 			sprintf(buf, "%d",pow_data->hours_left);
 			strcat(out_buf, " ");
 			strcat(out_buf, buf);
@@ -450,8 +455,8 @@ void* get_capacity_and_pow(void* thread_data){
 		}
 
 		if(pow_data->minutes_left!=0){
-			memset(buf, 0, 100);
-			sprintf(buf, "%d",pow_data->minutes_left);
+			memset(buf, 0, 99);
+			sprintf(buf, "%02d",pow_data->minutes_left);
 			strcat(out_buf, " ");
 			strcat(out_buf, buf);
 			strcat(out_buf, "m");
@@ -497,8 +502,6 @@ int main(){
 	cpu_freq_data cpu_freqs_data={0};
 	pulse_data p_data={0};
 	power_data pow_data={0};
-	char pow_buff[100]={0};
-	pow_data.output_buffer=pow_buff;
 
 	net_data.rx_bytes_fd = open("/sys/class/net/wlan0/statistics/rx_bytes", O_RDONLY);
 	net_data.tx_bytes_fd = open("/sys/class/net/wlan0/statistics/tx_bytes", O_RDONLY);
@@ -513,8 +516,6 @@ int main(){
 	cpu_freqs_data.cpu3_fd = open("/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq", O_RDONLY);
 	cpu_freqs_data.sleep_time=450000;
 
-
-	/*FILE* cpuinfo_f = fopen("/proc/cpuinfo", "r");*/
 	int temp_fd =open("/sys/class/hwmon/hwmon3/temp1_input",O_RDONLY);
 	int meminfo_fd =open("/proc/meminfo",O_RDONLY);
 	int governor_fd =open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",O_RDONLY);
@@ -540,6 +541,13 @@ int main(){
 	float brightness=0;
 	char date_str[100];
 
+	char buff[100]={0};
+	read(energy_full_fd,buff,100);
+	sscanf(buff, "%f",&pow_data.pow_full);
+	close(energy_full_fd);
+
+	/*get_capacity_and_pow(&pow_data);*/
+
 	pulse_init(&p_data);
 	get_sink_volume(&p_data);
 	pthread_create(&net_thr, NULL, get_network_stats, (void*)&net_data);
@@ -548,10 +556,6 @@ int main(){
 	pthread_create(&cpu_freqs_thr, NULL, get_cpu_freqs, (void*)&cpu_freqs_data);
 
 	
-	char buff[100]={0};
-	read(energy_full_fd,buff,100);
-	sscanf(buff, "%f",&pow_data.pow_full);
-	close(energy_full_fd);
 
 	while(1){
 		char buff[100]={0};
@@ -568,7 +572,7 @@ int main(){
 
 		sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %s | %.0f%% | %s \n"
 				,buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
-				mem_used,net_data.network_output,pow_data.output_buffer,floorf(brightness),date_str);
+				mem_used,net_data.network_output,pow_data.power_output,floorf(brightness),date_str);
 		printf("%s",print_buff);
 
 		write(pipe_fd,print_buff,200);
