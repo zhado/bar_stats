@@ -150,25 +150,26 @@ void append_rate(char* output,int power, int use_bytes){
 	if(use_bytes){
 		switch(power){
 			case 0:
-				strcat(output," bytes/s");
+				strcat(output," B");
 				break;
 			case 1:
-				strcat(output," Kbytes/s");
+				strcat(output," KB");
 				break;
 			case 2:
-				strcat(output," Mbytes/s");
+				strcat(output," MB");
 				break;
 		}
 	}else{
 		switch(power){
 			case 0:
-				strcat(output," bits/s");
+				strcat(output," b");
 				break;
 			case 1:
-				strcat(output," Kbits/s");
+				//kilobit
+				strcat(output," kb");
 				break;
 			case 2:
-				strcat(output," Mbits/s");
+				strcat(output," mb");
 				break;
 		}
 	}
