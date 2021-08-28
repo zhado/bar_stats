@@ -435,7 +435,7 @@ void* get_capacity_and_pow(void* thread_data){
 			strcat(out_buf, "+");
 			if(pow_now!=0)
 				hours_f=(energy_full*(1-capacity/100)/pow_now);
-		}else if (pow_data->charging=='U'){
+		}else if (pow_data->charging=='U' || pow_data->charging=='F'){
 			strcat(out_buf, "=");
 		}else{
 			strcat(out_buf, "-");
