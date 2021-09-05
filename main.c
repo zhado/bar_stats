@@ -10,9 +10,12 @@
 #include <math.h>
 #include <pulse/pulseaudio.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/statvfs.h>
+#include <stdatomic.h>
 
 int SLEEP_TIME=600000;
 int running=0;
@@ -44,7 +47,7 @@ typedef struct cpu_freq_data{
 	int cpu2_freq;
 	int cpu3_freq;
 	uint32_t sleep_time;
-	float ratio;
+	int average_freq;
 }cpu_freq_data;
 
 typedef struct pulse_data{
@@ -71,6 +74,11 @@ typedef struct power_data{
 	int minutes_left;
 
 }power_data;
+
+typedef struct disk_usage_data{
+	float total_gb;
+	float used_gb;
+}disk_usage_data;
 
 void reset_fp(FILE* ptr){
 	fseek( ptr, 0, SEEK_END );
@@ -380,6 +388,11 @@ void* get_cpu_freqs(void * thread_data){
 		cpu_freqs_data->cpu1_freq/=1000;
 		cpu_freqs_data->cpu2_freq/=1000;
 		cpu_freqs_data->cpu3_freq/=1000;
+		cpu_freqs_data->average_freq=(
+			cpu_freqs_data->cpu0_freq+
+			cpu_freqs_data->cpu1_freq+
+			cpu_freqs_data->cpu2_freq+
+			cpu_freqs_data->cpu3_freq)/4;
 		usleep(cpu_freqs_data->sleep_time);
 	}
 	return 0;
@@ -491,17 +504,31 @@ void get_temp(int temp_fd,float* tempf){
 	*tempf=(float)temp/1000;
 	lseek(temp_fd, 0, SEEK_SET);
 }
+void* get_disk_usage(void* thread_data){
+	disk_usage_data* disk_data=(disk_usage_data*)thread_data;
+	struct statvfs st_temp;
+	while(1){
+		statvfs("/", &st_temp);
+		uint64_t total_bytes=st_temp.f_blocks*st_temp.f_frsize;
+		uint64_t used_bytes=(st_temp.f_blocks-st_temp.f_bavail)*st_temp.f_frsize;
+		disk_data->used_gb=((float)used_bytes/1024/1024/1024);
+		disk_data->total_gb=((float)total_bytes/1024/1024/1024);
+		usleep(4000000);
+	}
+	return 0;
+}
 
 
 int main(){
 	running=1;
-	pthread_t audio_thr,net_thr,cpu_load_thr,pow_thr,cpu_freqs_thr;
+	pthread_t audio_thr,net_thr,cpu_load_thr,pow_thr,cpu_freqs_thr,disk_usage_thr;
 
 	network_thread_data net_data={0};
 	cpu_usage_thread_data cpu_data={0};
 	cpu_freq_data cpu_freqs_data={0};
 	pulse_data p_data={0};
 	power_data pow_data={0};
+	disk_usage_data disk_data={0};
 
 	net_data.rx_bytes_fd = open("/sys/class/net/wlan0/statistics/rx_bytes", O_RDONLY);
 	net_data.tx_bytes_fd = open("/sys/class/net/wlan0/statistics/tx_bytes", O_RDONLY);
@@ -525,16 +552,20 @@ int main(){
 	int energy_full_fd=open("/sys/class/power_supply/BAT0/energy_full",O_RDONLY);
 	int brightness_fd = open("/sys/class/backlight/amdgpu_bl0/brightness", O_RDONLY);
 
-	int pipe_fd_read = open("./aq", O_RDONLY | O_NONBLOCK);
-	int pipe_fd = open("./aq", O_WRONLY | O_NONBLOCK);
+	const char fifo_path[]="/tmp/bar_stats_fifo";
+	if(access(fifo_path, R_OK)!=0){
+		mkfifo(fifo_path, 0666);
+	}
+	int pipe_fd_read = open(fifo_path, O_RDONLY | O_NONBLOCK);
+	int pipe_fd = open(fifo_path, O_WRONLY | O_NONBLOCK);
+	if(pipe_fd<0 || pipe_fd_read <0)
+	{
+		fprintf(stderr,"\n");
+		exit(1);
+	}
 	close(pipe_fd_read);
 	signal(SIGPIPE, SIG_IGN);
 
-	int volume=0;
-	int cpu0f=0;
-	int cpu1f=0;
-	int cpu2f=0;
-	int cpu3f=0;
 	uint32_t mem_used=0;
 	char gov[4]={0};
 	float tempf=0;
@@ -554,12 +585,16 @@ int main(){
 	pthread_create(&cpu_load_thr, NULL, get_cpu_load, (void*)&cpu_data);
 	pthread_create(&pow_thr, NULL, get_capacity_and_pow, (void*)&pow_data);
 	pthread_create(&cpu_freqs_thr, NULL, get_cpu_freqs, (void*)&cpu_freqs_data);
+	pthread_create(&disk_usage_thr, NULL, get_disk_usage, (void*)&disk_data);
 
-	
-
+	int counter=0;
 	while(1){
 		char buff[100]={0};
 		char print_buff[200]={0};
+		char print_buff2[200]={0};
+		sprintf(print_buff2, "sandrp %d\n",counter);
+		counter++;
+
 		snprintf(buff,100, "%d%%",p_data.vol);
 		if(p_data.muted){
 			strcat(buff," M");
@@ -570,12 +605,12 @@ int main(){
 		get_brightness(brightness_fd,&brightness);
 		get_time(date_str);
 
-		sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %s | %s | %.0f%% | %s \n"
+		int written=sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %.2f/%.0f | %s | %s | %.0f%% | %s \n"
 				,buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
-				mem_used,net_data.network_output,pow_data.power_output,floorf(brightness),date_str);
+				mem_used,disk_data.used_gb,disk_data.total_gb,net_data.network_output,pow_data.power_output,floorf(brightness),date_str);
 		printf("%s",print_buff);
-
-		write(pipe_fd,print_buff,200);
+		/*printf("written %d , strlen %lu\n", written, strlen(print_buff));*/
+		write(pipe_fd,print_buff,written);
 		fflush(stdout);
 		usleep(100000);
 	}
