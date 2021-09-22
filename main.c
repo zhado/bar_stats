@@ -26,8 +26,8 @@ typedef struct network_thread_data{
 	int tx_bytes_fd;
 	int rx_packets_fd;
 	int tx_packets_fd;
-	float rx_bytes_dx;
-	float tx_bytes_dx;
+	double rx_bytes_dx;
+	double tx_bytes_dx;
 	uint32_t rx_packets_dx;
 	uint32_t tx_packets_dx;
 }network_thread_data;
@@ -195,7 +195,7 @@ void make_net_output(network_thread_data* net_data){
 	if(!use_bytes){
 		//convert bytes to bits
 		net_data->rx_bytes_dx*=8;
-		net_data->tx_packets_dx*=8;
+		net_data->tx_bytes_dx*=8;
 	}
 
 	int powr_rx=0;
