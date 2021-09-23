@@ -553,9 +553,16 @@ int main(){
 	int brightness_fd = open("/sys/class/backlight/amdgpu_bl0/brightness", O_RDONLY);
 
 	const char fifo_path[]="/tmp/bar_stats_fifo";
+	const char fifo_path2[]="/tmp/bar_stats_fifo2";
+
 	if(access(fifo_path, R_OK)!=0){
 		mkfifo(fifo_path, 0666);
 	}
+	
+	if(access(fifo_path2, R_OK)!=0){
+		mkfifo(fifo_path2, 0666);
+	}
+
 	int pipe_fd_read = open(fifo_path, O_RDONLY | O_NONBLOCK);
 	int pipe_fd = open(fifo_path, O_WRONLY | O_NONBLOCK);
 	if(pipe_fd<0 || pipe_fd_read <0)
@@ -564,6 +571,16 @@ int main(){
 		exit(1);
 	}
 	close(pipe_fd_read);
+
+	int pipe_fd_read2 = open(fifo_path2, O_RDONLY | O_NONBLOCK);
+	int pipe_fd2 = open(fifo_path2, O_WRONLY | O_NONBLOCK);
+	if(pipe_fd2<0 || pipe_fd_read2 <0)
+	{
+		fprintf(stderr,"\n");
+		exit(1);
+	}
+	close(pipe_fd_read2);
+
 	signal(SIGPIPE, SIG_IGN);
 
 	uint32_t mem_used=0;
@@ -611,6 +628,7 @@ int main(){
 		printf("%s",print_buff);
 		/*printf("written %d , strlen %lu\n", written, strlen(print_buff));*/
 		write(pipe_fd,print_buff,written);
+		write(pipe_fd2,print_buff,written);
 		fflush(stdout);
 		usleep(100000);
 	}
