@@ -15,7 +15,6 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/statvfs.h>
-#include <stdatomic.h>
 
 int SLEEP_TIME=600000;
 int running=0;
@@ -344,18 +343,21 @@ void* get_cpu_load(void* thread_data){
 				,&end_user,&end_nice,&end_system_,&end_idle,&end_iowait,&end_irq,&end_softirq,&end_steal,&end_guest,&end_guest_nice);
 		lseek(cpu_data->stat_fd, 0, SEEK_SET);
 
-		uint64_t dx_user=end_user-start_user;
-		uint64_t dx_nice=end_nice-start_nice;
-		uint64_t dx_system_=end_system_-start_system_;
-		uint64_t dx_idle=end_idle-start_idle;
-		uint64_t dx_iowait=end_iowait-start_iowait;
-		uint64_t dx_irq=end_irq-start_irq;
-		uint64_t dx_softirq=end_softirq-start_softirq;
-		uint64_t dx_steal=end_steal-start_steal;
-		uint64_t dx_guest=end_guest-start_guest;
-		uint64_t dx_guest_nice=end_guest_nice-start_guest_nice;
+		int dx_user=end_user-start_user;
+		int dx_nice=end_nice-start_nice;
+		int dx_system=end_system_-start_system_;
+		int dx_idle=end_idle-start_idle;
+		int dx_iowait=end_iowait-start_iowait;
+		int dx_irq=end_irq-start_irq;
+		int dx_softirq=end_softirq-start_softirq;
+		int dx_steal=end_steal-start_steal;
+		int dx_guest=end_guest-start_guest;
+		int dx_guest_nice=end_guest_nice-start_guest_nice;
+		/*printf("%lu\n%lu\n%lu\n%lu\n%lu\n%lu\n%lu\n%lu\n%lu\n%lu\n\n",dx_user,dx_nice,dx_system,dx_idle,dx_iowait,dx_irq,dx_softirq,dx_steal,dx_guest,dx_guest_nice);*/
 
-		double sum=dx_user+dx_nice+dx_system_+dx_idle+dx_iowait+dx_irq+dx_softirq+dx_steal+dx_guest+dx_guest_nice;
+		double sum=dx_user+dx_nice+dx_system+dx_idle+dx_iowait+dx_irq+dx_softirq+dx_steal+dx_guest+dx_guest_nice;
+		if(sum<0)sum*=-1;
+		if(dx_user<0)dx_user*=-1;
 		float ratio=((double)dx_user)/sum *100;
 		cpu_data->ratio=ratio;
 	}
@@ -518,7 +520,6 @@ void* get_disk_usage(void* thread_data){
 	return 0;
 }
 
-
 int main(){
 	running=1;
 	pthread_t audio_thr,net_thr,cpu_load_thr,pow_thr,cpu_freqs_thr,disk_usage_thr;
@@ -543,7 +544,7 @@ int main(){
 	cpu_freqs_data.cpu3_fd = open("/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq", O_RDONLY);
 	cpu_freqs_data.sleep_time=450000;
 
-	int temp_fd =open("/sys/class/hwmon/hwmon3/temp1_input",O_RDONLY);
+	int temp_fd =open("/sys/class/hwmon/hwmon4/temp1_input",O_RDONLY);
 	int meminfo_fd =open("/proc/meminfo",O_RDONLY);
 	int governor_fd =open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",O_RDONLY);
 	pow_data.capacity_fd =open("/sys/class/power_supply/BAT0/capacity",O_RDONLY);
