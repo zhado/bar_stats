@@ -565,13 +565,33 @@ int main(){
 	}
 
 	int pipe_fd_read = open(fifo_path, O_RDONLY | O_NONBLOCK);
+	
+	// test if fifo is locked
+	struct flock fl;
+	memset(&fl,0 , sizeof(struct flock));
+	fcntl(pipe_fd_read, F_GETLK, &fl);
+
 	int pipe_fd = open(fifo_path, O_WRONLY | O_NONBLOCK);
+
 	if(pipe_fd<0 || pipe_fd_read <0)
 	{
 		fprintf(stderr,"\n");
 		exit(1);
 	}
 	close(pipe_fd_read);
+
+	if(fl.l_type==2){
+		// lock it if unlocked
+		fl.l_type   = F_WRLCK;
+		fl.l_whence = SEEK_SET;
+		fl.l_start  = 0;       
+		fl.l_len    = 0;       
+		fl.l_pid    = getpid();
+		fcntl(pipe_fd, F_SETLKW, &fl);
+	}else{
+		fprintf(stderr,"bar stats already running, fifo is locked.\n");
+		exit(1);
+	}
 
 	int pipe_fd_read2 = open(fifo_path2, O_RDONLY | O_NONBLOCK);
 	int pipe_fd2 = open(fifo_path2, O_WRONLY | O_NONBLOCK);
