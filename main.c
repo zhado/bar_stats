@@ -646,7 +646,7 @@ int main(){
 	pthread_create(&disk_usage_thr, NULL, get_disk_usage, (void*)&disk_data);
 
 	char sway_ipc_str[500]={0};
-	sway_ipc_str[307]='E';
+	char lang_char='E';
 	while(1){
 		char volume_buff[100]={0};
 		char print_buff[200]={0};
@@ -654,6 +654,10 @@ int main(){
 		int sway_ret=0;
 		while((sway_ret=recv(sway_sock, sway_ipc_str, 14, 0) )!=-1){
 			sway_ret=recv(sway_sock, sway_ipc_str,*((int*)&sway_ipc_str[6]), 0);
+		}
+		char* pasux=strstr(sway_ipc_str, "layout_name\":");
+		if(pasux!=0){
+			lang_char=pasux[15];
 		}
 
 		snprintf(volume_buff,100, "%d%%",pulse_data.vol);
@@ -666,9 +670,10 @@ int main(){
 		get_brightness(brightness_fd,&brightness);
 		get_time(date_str);
 
+
 		int written_bytes=sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %.2f/%.0f | %s | %s | %.0f%% | %c | %s \n"
 				,volume_buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
-				mem_used,disk_data.used_gb,disk_data.total_gb,net_data.network_output,pow_data.power_output,floorf(brightness),sway_ipc_str[307],date_str);
+				mem_used,disk_data.used_gb,disk_data.total_gb,net_data.network_output,pow_data.power_output,floorf(brightness),lang_char,date_str);
 		printf("%s\n",print_buff);
 		write(pipe_fd,print_buff,written_bytes);
 		write(pipe_fd2,print_buff,written_bytes);
