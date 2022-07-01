@@ -57,7 +57,7 @@ typedef struct pulse_data{
 	int done;
 	int muted;
 	int vol;
-}pulse_data;
+}pulse_data_type;
 
 typedef struct power_data{
 	char power_output[100];
@@ -85,24 +85,24 @@ void reset_fp(FILE* ptr){
 }
 
 void info_cb (pa_context *c, const pa_sink_info *i, int eol, void *userdata){
-	pulse_data* p_data=((pulse_data*)userdata);
+	pulse_data_type* pulse_data=((pulse_data_type*)userdata);
 	if(eol)
 		return;
 	float vol=((float)i->volume.values[0])/((float)PA_VOLUME_NORM)*100;
 	if(i->mute){
-		((pulse_data*)userdata)->muted=1;
+		((pulse_data_type*)userdata)->muted=1;
 	}else{
-		((pulse_data*)userdata)->muted=0;
+		((pulse_data_type*)userdata)->muted=0;
 	}
-	((pulse_data*)userdata)->vol=vol;
+	((pulse_data_type*)userdata)->vol=vol;
 
-	pa_threaded_mainloop_signal(p_data->main_loop, 0);
+	pa_threaded_mainloop_signal(pulse_data->main_loop, 0);
 }
 
 void context_change_cb(pa_context *c, void* userdata){
 	switch (pa_context_get_state(c)) {
 		case PA_CONTEXT_READY:{
-			((pulse_data*)userdata)->pulse_ready=1;
+			((pulse_data_type*)userdata)->pulse_ready=1;
 		}break;
 		default:
 		break;
@@ -110,21 +110,21 @@ void context_change_cb(pa_context *c, void* userdata){
 }
 
 void* get_sink_volume(void* thread_data){
-	pulse_data* p_data=((pulse_data*)thread_data);
-	p_data->vol=-1;
-	p_data->muted=0;
-	p_data->done=0;
-	pa_operation* op=pa_context_get_sink_info_by_name(p_data->context,"alsa_output.pci-0000_04_00.6.analog-stereo",info_cb,p_data);
+	pulse_data_type* pulse_data=((pulse_data_type*)thread_data);
+	pulse_data->vol=-1;
+	pulse_data->muted=0;
+	pulse_data->done=0;
+	pa_operation* op=pa_context_get_sink_info_by_name(pulse_data->context,"alsa_output.pci-0000_04_00.6.analog-stereo",info_cb,pulse_data);
 	pa_operation_state_t state=pa_operation_get_state(op);
 
 	/*printf("state=%d\n",state);*/
-	while(p_data->vol==-1){
+	while(pulse_data->vol==-1){
 		if(state==PA_OPERATION_RUNNING)
 			break;
 		/*return 0;*/
 		usleep(1);
 	}
-	p_data->done=1;
+	pulse_data->done=1;
 	pa_operation_unref(op);
 	return 0;
 }
@@ -134,29 +134,29 @@ void suc_cb (pa_context *c, int success, void *userdata){}
 void my_subscription_callback(pa_context *c, pa_subscription_event_type_t t,uint32_t idx, void *userdata) {
 	get_sink_volume(userdata);
 }
-void pulse_init(pulse_data* p_data){
-	p_data->pulse_ready=0;
-	p_data->vol=-1;
-	p_data->muted=0;
-	p_data->main_loop=pa_threaded_mainloop_new();
-	pa_threaded_mainloop_lock(p_data->main_loop);
-	p_data->mainloop_api= pa_threaded_mainloop_get_api(p_data->main_loop);
-	p_data->context= pa_context_new(p_data->mainloop_api, "bar");
-	pa_context_connect(p_data->context, 0, PA_CONTEXT_NOFAIL, 0);
-	pa_context_set_state_callback(p_data->context, context_change_cb, p_data);
-	pa_threaded_mainloop_start(p_data->main_loop);
-	pa_threaded_mainloop_unlock(p_data->main_loop);
-	while(!p_data->pulse_ready){
+void pulse_init(pulse_data_type* pulse_data){
+	pulse_data->pulse_ready=0;
+	pulse_data->vol=-1;
+	pulse_data->muted=0;
+	pulse_data->main_loop=pa_threaded_mainloop_new();
+	pa_threaded_mainloop_lock(pulse_data->main_loop);
+	pulse_data->mainloop_api= pa_threaded_mainloop_get_api(pulse_data->main_loop);
+	pulse_data->context= pa_context_new(pulse_data->mainloop_api, "bar");
+	pa_context_connect(pulse_data->context, 0, PA_CONTEXT_NOFAIL, 0);
+	pa_context_set_state_callback(pulse_data->context, context_change_cb, pulse_data);
+	pa_threaded_mainloop_start(pulse_data->main_loop);
+	pa_threaded_mainloop_unlock(pulse_data->main_loop);
+	while(!pulse_data->pulse_ready){
 		usleep(1);
 	}
-	pa_context_subscribe(p_data->context, PA_SUBSCRIPTION_MASK_SINK,suc_cb, p_data);
-	pa_context_set_subscribe_callback (p_data->context,my_subscription_callback,p_data);
+	pa_context_subscribe(pulse_data->context, PA_SUBSCRIPTION_MASK_SINK,suc_cb, pulse_data);
+	pa_context_set_subscribe_callback (pulse_data->context,my_subscription_callback,pulse_data);
 }
 
-void deactivate_pulse(pulse_data* p_data){
-	p_data->mainloop_api->quit(p_data->mainloop_api,0);
-	pa_threaded_mainloop_stop(p_data->main_loop);
-	pa_threaded_mainloop_free(p_data->main_loop);
+void deactivate_pulse(pulse_data_type* pulse_data){
+	pulse_data->mainloop_api->quit(pulse_data->mainloop_api,0);
+	pa_threaded_mainloop_stop(pulse_data->main_loop);
+	pa_threaded_mainloop_free(pulse_data->main_loop);
 }
 
 void append_rate(char* output,int power, int use_bytes){
@@ -527,7 +527,7 @@ int main(){
 	network_thread_data net_data={0};
 	cpu_usage_thread_data cpu_data={0};
 	cpu_freq_data cpu_freqs_data={0};
-	pulse_data p_data={0};
+	pulse_data_type pulse_data={0};
 	power_data pow_data={0};
 	disk_usage_data disk_data={0};
 
@@ -617,25 +617,21 @@ int main(){
 
 	/*get_capacity_and_pow(&pow_data);*/
 
-	pulse_init(&p_data);
-	get_sink_volume(&p_data);
+	pulse_init(&pulse_data);
+	get_sink_volume(&pulse_data);
 	pthread_create(&net_thr, NULL, get_network_stats, (void*)&net_data);
 	pthread_create(&cpu_load_thr, NULL, get_cpu_load, (void*)&cpu_data);
 	pthread_create(&pow_thr, NULL, get_capacity_and_pow, (void*)&pow_data);
 	pthread_create(&cpu_freqs_thr, NULL, get_cpu_freqs, (void*)&cpu_freqs_data);
 	pthread_create(&disk_usage_thr, NULL, get_disk_usage, (void*)&disk_data);
 
-	int counter=0;
 	while(1){
-		char buff[100]={0};
+		char volume_buff[100]={0};
 		char print_buff[200]={0};
-		char print_buff2[200]={0};
-		sprintf(print_buff2, "sandrp %d\n",counter);
-		counter++;
 
-		snprintf(buff,100, "%d%%",p_data.vol);
-		if(p_data.muted){
-			strcat(buff," M");
+		snprintf(volume_buff,100, "%d%%",pulse_data.vol);
+		if(pulse_data.muted){
+			strcat(volume_buff," M");
 		}
 		get_temp(temp_fd,&tempf);
 		get_used_memory(meminfo_fd, &mem_used);
@@ -643,13 +639,12 @@ int main(){
 		get_brightness(brightness_fd,&brightness);
 		get_time(date_str);
 
-		int written=sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %.2f/%.0f | %s | %s | %.0f%% | %s \n"
-				,buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
+		int written_bytes=sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %.2f/%.0f | %s | %s | %.0f%% | %s \n"
+				,volume_buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
 				mem_used,disk_data.used_gb,disk_data.total_gb,net_data.network_output,pow_data.power_output,floorf(brightness),date_str);
 		printf("%s",print_buff);
-		/*printf("written %d , strlen %lu\n", written, strlen(print_buff));*/
-		write(pipe_fd,print_buff,written);
-		write(pipe_fd2,print_buff,written);
+		write(pipe_fd,print_buff,written_bytes);
+		write(pipe_fd2,print_buff,written_bytes);
 		fflush(stdout);
 		usleep(100000);
 	}
