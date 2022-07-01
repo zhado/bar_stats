@@ -15,6 +15,10 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/statvfs.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/fcntl.h>
+#include <sys/un.h>
 
 int SLEEP_TIME=600000;
 int running=0;
@@ -615,6 +619,22 @@ int main(){
 	sscanf(buff, "%f",&pow_data.pow_full);
 	close(energy_full_fd);
 
+	struct sockaddr_un remote;
+	char str[500];
+	int sway_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+	fcntl(sway_sock, F_SETFL, O_NONBLOCK);
+	remote.sun_family = AF_UNIX;
+	strcpy(remote.sun_path, getenv("SWAYSOCK"));
+	int len = strlen(remote.sun_path) + sizeof(remote.sun_family);
+	if (connect(sway_sock, (struct sockaddr *)&remote, len) == -1) {
+		perror("connect");
+		exit(1);
+	}
+	char ipc_header_and_payload[]="i3-ipc" "\xa""\x0""\x0""\x0" "\x2""\x0""\x0""\x0" "['input']";
+	send(sway_sock, ipc_header_and_payload, 24, 0);
+	recv(sway_sock, str, 100, 0);
+
+
 	/*get_capacity_and_pow(&pow_data);*/
 
 	pulse_init(&pulse_data);
@@ -625,9 +645,16 @@ int main(){
 	pthread_create(&cpu_freqs_thr, NULL, get_cpu_freqs, (void*)&cpu_freqs_data);
 	pthread_create(&disk_usage_thr, NULL, get_disk_usage, (void*)&disk_data);
 
+	char sway_ipc_str[500]={0};
+	sway_ipc_str[307]='E';
 	while(1){
 		char volume_buff[100]={0};
 		char print_buff[200]={0};
+
+		int sway_ret=0;
+		while((sway_ret=recv(sway_sock, sway_ipc_str, 14, 0) )!=-1){
+			sway_ret=recv(sway_sock, sway_ipc_str,*((int*)&sway_ipc_str[6]), 0);
+		}
 
 		snprintf(volume_buff,100, "%d%%",pulse_data.vol);
 		if(pulse_data.muted){
@@ -639,10 +666,10 @@ int main(){
 		get_brightness(brightness_fd,&brightness);
 		get_time(date_str);
 
-		int written_bytes=sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %.2f/%.0f | %s | %s | %.0f%% | %s \n"
+		int written_bytes=sprintf(print_buff,"%s | %.2f | +%.1f°C | %d %d %d %d %s | %d MB | %.2f/%.0f | %s | %s | %.0f%% | %c | %s \n"
 				,volume_buff,cpu_data.ratio,tempf,cpu_freqs_data.cpu0_freq,cpu_freqs_data.cpu1_freq,cpu_freqs_data.cpu2_freq,cpu_freqs_data.cpu3_freq,gov,
-				mem_used,disk_data.used_gb,disk_data.total_gb,net_data.network_output,pow_data.power_output,floorf(brightness),date_str);
-		printf("%s",print_buff);
+				mem_used,disk_data.used_gb,disk_data.total_gb,net_data.network_output,pow_data.power_output,floorf(brightness),sway_ipc_str[307],date_str);
+		printf("%s\n",print_buff);
 		write(pipe_fd,print_buff,written_bytes);
 		write(pipe_fd2,print_buff,written_bytes);
 		fflush(stdout);
